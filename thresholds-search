@@ -1,0 +1,52 @@
+import numpy as np
+
+def calculate_user_ratios(weight_table, user_scores, threshold_pairs):
+    categories = ['cat1', 'cat2', 'cat3']
+    levels = ['high', 'medium', 'low']
+    
+    # Convert weight_table to a dictionary for easier access
+    weight_dict = {(cat, level): weight_table[i][j] 
+                   for i, cat in enumerate(categories) 
+                   for j, level in enumerate(levels)}
+    
+    # Calculate naughty scores for all users
+    naughty_scores = []
+    for user_score in user_scores:
+        score = sum(weight_dict[(cat, level)] for cat, level in zip(categories, user_score))
+        naughty_scores.append(score)
+    
+    # Calculate ratios of bad and naughty users for each threshold pair
+    bad_ratios = []
+    naughty_ratios = []
+    
+    for threshold1, threshold2 in threshold_pairs:
+        bad_users = sum(score >= threshold1 for score in naughty_scores)
+        naughty_users = sum(threshold2 <= score < threshold1 for score in naughty_scores)
+        
+        bad_ratio = bad_users / len(user_scores)
+        naughty_ratio = naughty_users / len(user_scores)
+        
+        bad_ratios.append(bad_ratio)
+        naughty_ratios.append(naughty_ratio)
+    
+    return bad_ratios, naughty_ratios
+
+# Example usage:
+weight_table = [
+    [10, 5, 1],  # cat1: high, medium, low
+    [8, 4, 2],   # cat2: high, medium, low
+    [6, 3, 1]    # cat3: high, medium, low
+]
+
+user_scores = [
+    ['high', 'low', 'medium'],
+    ['medium', 'medium', 'low'],
+    ['low', 'high', 'high'],
+    ['high', 'high', 'high']
+]
+
+threshold_pairs = [(20, 15), (25, 18), (30, 22)]
+
+bad_ratios, naughty_ratios = calculate_user_ratios(weight_table, user_scores, threshold_pairs)
+print("Bad user ratios for different thresholds:", bad_ratios)
+print("Naughty user ratios for different thresholds:", naughty_ratios)
