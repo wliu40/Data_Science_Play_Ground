@@ -1,0 +1,302 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import Adam
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set random seed for reproducibility
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# Assuming X is your feature array of shape (num_samples, 23) and y is your target array
+# For demonstration purposes, let's create some synthetic data
+def generate_synthetic_data(n_samples=1000):
+    # Generate features ranging from 0 to 5000
+    X = np.random.randint(0, 5000, size=(n_samples, 23)).astype(np.float32)
+    
+    # Generate binary targets (a simple rule for demonstration)
+    # In real scenarios, this would be your actual labeled data
+    y = np.zeros(n_samples)
+    for i in range(n_samples):
+        if np.mean(X[i]) > 2500:  # Simple rule for binary classification
+            y[i] = 1
+    
+    return X, y
+
+X, y = generate_synthetic_data(n_samples=5000)
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Normalize the features (important for LSTM performance)
+scaler = MinMaxScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Reshape input data for LSTM [samples, time steps, features]
+# For this case, we treat each feature as a time step
+X_train_reshaped = X_train_scaled.reshape(X_train_scaled.shape[0], X_train_scaled.shape[1], 1)
+X_test_reshaped = X_test_scaled.reshape(X_test_scaled.shape[0], X_test_scaled.shape[1], 1)
+
+# Alternative reshape: treat as a single time step with all features
+X_train_alt = X_train_scaled.reshape(X_train_scaled.shape[0], 1, X_train_scaled.shape[1])
+X_test_alt = X_test_scaled.reshape(X_test_scaled.shape[0], 1, X_test_scaled.shape[1])
+
+# Function to evaluate the model
+def evaluate_model(model, X, y, model_name="Model"):
+    y_pred_prob = model.predict(X)
+    y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+    
+    # Calculate metrics
+    acc = accuracy_score(y, y_pred)
+    prec = precision_score(y, y_pred)
+    rec = recall_score(y, y_pred)
+    f1 = f1_score(y, y_pred)
+    
+    print(f"\n{model_name} Evaluation:")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall: {rec:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    
+    # Confusion matrix
+    cm = confusion_matrix(y, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Confusion Matrix - {model_name}')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.show()
+    
+    return acc, prec, rec, f1
+
+# Define callback for early stopping
+early_stopping = tf.keras.callbacks.EarlyStopping(
+    monitor='val_loss',
+    patience=10,
+    restore_best_weights=True
+)
+
+# 1. Simple LSTM Model
+def create_simple_lstm():
+    model = Sequential([
+        LSTM(32, input_shape=(23, 1), return_sequences=False),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# 2. Moderate LSTM Model
+def create_moderate_lstm():
+    model = Sequential([
+        LSTM(64, input_shape=(23, 1), return_sequences=True),
+        Dropout(0.2),
+        LSTM(32, return_sequences=False),
+        Dense(16, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# 3. Complex LSTM Model
+def create_complex_lstm():
+    model = Sequential([
+        LSTM(128, input_shape=(23, 1), return_sequences=True),
+        BatchNormalization(),
+        Dropout(0.3),
+        LSTM(64, return_sequences=True),
+        Dropout(0.3),
+        LSTM(32, return_sequences=False),
+        BatchNormalization(),
+        Dense(32, activation='relu'),
+        Dropout(0.2),
+        Dense(16, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# 4. Alternative approach: Single time step with all features
+def create_single_timestep_lstm():
+    model = Sequential([
+        LSTM(64, input_shape=(1, 23), return_sequences=False),
+        Dropout(0.2),
+        Dense(32, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# Train and evaluate models
+print("Training Simple LSTM Model...")
+simple_model = create_simple_lstm()
+simple_history = simple_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+print("\nTraining Moderate LSTM Model...")
+moderate_model = create_moderate_lstm()
+moderate_history = moderate_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+print("\nTraining Complex LSTM Model...")
+complex_model = create_complex_lstm()
+complex_history = complex_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+print("\nTraining Single Timestep LSTM Model...")
+single_ts_model = create_single_timestep_lstm()
+single_ts_history = single_ts_model.fit(
+    X_train_alt, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+# Evaluate all models
+simple_metrics = evaluate_model(simple_model, X_test_reshaped, y_test, "Simple LSTM")
+moderate_metrics = evaluate_model(moderate_model, X_test_reshaped, y_test, "Moderate LSTM")
+complex_metrics = evaluate_model(complex_model, X_test_reshaped, y_test, "Complex LSTM")
+single_ts_metrics = evaluate_model(single_ts_model, X_test_alt, y_test, "Single Timestep LSTM")
+
+# Plot training history for all models
+plt.figure(figsize=(12, 8))
+
+plt.subplot(2, 2, 1)
+plt.plot(simple_history.history['accuracy'], label='train')
+plt.plot(simple_history.history['val_accuracy'], label='validation')
+plt.title('Simple LSTM Accuracy')
+plt.legend()
+
+plt.subplot(2, 2, 2)
+plt.plot(moderate_history.history['accuracy'], label='train')
+plt.plot(moderate_history.history['val_accuracy'], label='validation')
+plt.title('Moderate LSTM Accuracy')
+plt.legend()
+
+plt.subplot(2, 2, 3)
+plt.plot(complex_history.history['accuracy'], label='train')
+plt.plot(complex_history.history['val_accuracy'], label='validation')
+plt.title('Complex LSTM Accuracy')
+plt.legend()
+
+plt.subplot(2, 2, 4)
+plt.plot(single_ts_history.history['accuracy'], label='train')
+plt.plot(single_ts_history.history['val_accuracy'], label='validation')
+plt.title('Single Timestep LSTM Accuracy')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Compare models performance in a bar chart
+models = ['Simple', 'Moderate', 'Complex', 'Single TS']
+metrics = np.array([
+    simple_metrics,
+    moderate_metrics,
+    complex_metrics,
+    single_ts_metrics
+])
+
+plt.figure(figsize=(14, 8))
+x = np.arange(len(models))
+width = 0.2
+
+plt.bar(x - width*1.5, metrics[:, 0], width, label='Accuracy')
+plt.bar(x - width/2, metrics[:, 1], width, label='Precision')
+plt.bar(x + width/2, metrics[:, 2], width, label='Recall')
+plt.bar(x + width*1.5, metrics[:, 3], width, label='F1 Score')
+
+plt.ylabel('Score')
+plt.title('Model Comparison')
+plt.xticks(x, models)
+plt.legend()
+plt.ylim(0, 1)
+plt.tight_layout()
+plt.show()
+
+# Function to make predictions on new data
+def predict_new_data(model, new_data, reshape_alt=False):
+    # Ensure new_data is a numpy array with shape (n_samples, 23)
+    if isinstance(new_data, list):
+        new_data = np.array(new_data)
+    if len(new_data.shape) == 1:
+        new_data = new_data.reshape(1, -1)
+    
+    # Scale the data
+    new_data_scaled = scaler.transform(new_data)
+    
+    # Reshape for LSTM
+    if reshape_alt:
+        new_data_reshaped = new_data_scaled.reshape(new_data_scaled.shape[0], 1, new_data_scaled.shape[1])
+    else:
+        new_data_reshaped = new_data_scaled.reshape(new_data_scaled.shape[0], new_data_scaled.shape[1], 1)
+    
+    # Make prediction
+    predictions = model.predict(new_data_reshaped)
+    binary_predictions = (predictions > 0.5).astype(int)
+    
+    return binary_predictions.flatten(), predictions.flatten()
+
+# Example usage:
+# Assuming 'best_model' is the model with the best performance
+best_model = complex_model  # Replace with the actual best model based on evaluation
+
+# Example new data (one sample with 23 features)
+new_sample = np.random.randint(0, 5000, size=(1, 23)).astype(np.float32)
+prediction, probability = predict_new_data(best_model, new_sample)
+
+print(f"\nNew data prediction: {prediction[0]} (probability: {probability[0]:.4f})")
+
+# Save the best model
+best_model.save("best_lstm_binary_classifier.h5")
+print("\nBest model saved as 'best_lstm_binary_classifier.h5'")
