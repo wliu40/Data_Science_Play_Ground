@@ -1,0 +1,442 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Input, Concatenate
+from tensorflow.keras.layers import Attention, LayerNormalization, MultiHeadAttention, Bidirectional
+from tensorflow.keras.optimizers import Adam
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set random seed for reproducibility
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# Create synthetic data (same as previous example)
+def generate_synthetic_data(n_samples=1000):
+    X = np.random.randint(0, 5000, size=(n_samples, 23)).astype(np.float32)
+    y = np.zeros(n_samples)
+    for i in range(n_samples):
+        if np.mean(X[i]) > 2500:
+            y[i] = 1
+    return X, y
+
+X, y = generate_synthetic_data(n_samples=5000)
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Normalize the features
+scaler = MinMaxScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Reshape input data for LSTM [samples, time steps, features]
+# For this implementation, we'll treat each feature as a time step
+X_train_reshaped = X_train_scaled.reshape(X_train_scaled.shape[0], X_train_scaled.shape[1], 1)
+X_test_reshaped = X_test_scaled.reshape(X_test_scaled.shape[0], X_test_scaled.shape[1], 1)
+
+# Early stopping callback
+early_stopping = tf.keras.callbacks.EarlyStopping(
+    monitor='val_loss',
+    patience=10,
+    restore_best_weights=True
+)
+
+# Evaluation function (same as before)
+def evaluate_model(model, X, y, model_name="Model"):
+    y_pred_prob = model.predict(X)
+    y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+    
+    # Calculate metrics
+    acc = accuracy_score(y, y_pred)
+    prec = precision_score(y, y_pred)
+    rec = recall_score(y, y_pred)
+    f1 = f1_score(y, y_pred)
+    auc = roc_auc_score(y, y_pred_prob)
+    
+    print(f"\n{model_name} Evaluation:")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall: {rec:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"AUC: {auc:.4f}")
+    
+    # Confusion matrix
+    cm = confusion_matrix(y, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Confusion Matrix - {model_name}')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.show()
+    
+    return acc, prec, rec, f1, auc
+
+# 1. LSTM with Self-Attention (Moderate Complexity)
+def create_lstm_self_attention():
+    """
+    Create an LSTM model with self-attention mechanism.
+    Self-attention allows the model to focus on important time steps.
+    """
+    # Input layer
+    inputs = Input(shape=(23, 1))
+    
+    # LSTM layers
+    lstm_out = LSTM(64, return_sequences=True)(inputs)
+    lstm_out = Dropout(0.2)(lstm_out)
+    
+    # Self-attention layer
+    attention = MultiHeadAttention(num_heads=4, key_dim=16)(lstm_out, lstm_out)
+    attention = LayerNormalization(epsilon=1e-6)(attention + lstm_out)  # Add & Norm (residual connection)
+    
+    # Second LSTM layer
+    lstm_out2 = LSTM(32, return_sequences=False)(attention)
+    lstm_out2 = Dropout(0.2)(lstm_out2)
+    
+    # Output layers
+    dense = Dense(16, activation='relu')(lstm_out2)
+    output = Dense(1, activation='sigmoid')(dense)
+    
+    # Create and compile model
+    model = Model(inputs=inputs, outputs=output)
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# 2. Bidirectional LSTM with Attention (More Complex)
+def create_bidirectional_lstm_attention():
+    """
+    Create a Bidirectional LSTM model with attention.
+    Bidirectional LSTMs process the sequence in both directions.
+    Combined with attention, this captures more context from the features.
+    """
+    # Input layer
+    inputs = Input(shape=(23, 1))
+    
+    # Bidirectional LSTM
+    bilstm_out = Bidirectional(LSTM(64, return_sequences=True))(inputs)
+    bilstm_out = BatchNormalization()(bilstm_out)
+    bilstm_out = Dropout(0.3)(bilstm_out)
+    
+    # Multi-head attention
+    attention = MultiHeadAttention(num_heads=8, key_dim=16)(bilstm_out, bilstm_out)
+    attention = LayerNormalization(epsilon=1e-6)(attention + bilstm_out)  # Residual connection
+    
+    # Second Bidirectional LSTM layer
+    bilstm_out2 = Bidirectional(LSTM(32, return_sequences=False))(attention)
+    bilstm_out2 = BatchNormalization()(bilstm_out2)
+    bilstm_out2 = Dropout(0.3)(bilstm_out2)
+    
+    # Output layers
+    dense1 = Dense(32, activation='relu')(bilstm_out2)
+    dense1 = Dropout(0.2)(dense1)
+    dense2 = Dense(16, activation='relu')(dense1)
+    output = Dense(1, activation='sigmoid')(dense2)
+    
+    # Create and compile model
+    model = Model(inputs=inputs, outputs=output)
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+# 3. Custom Attention Mechanism (Bahdanau-style attention)
+# This is a more explicit implementation of attention for better interpretability
+class BahdanauAttention(tf.keras.layers.Layer):
+    def __init__(self, units):
+        super(BahdanauAttention, self).__init__()
+        self.W1 = tf.keras.layers.Dense(units)
+        self.W2 = tf.keras.layers.Dense(units)
+        self.V = tf.keras.layers.Dense(1)
+
+    def call(self, query, values):
+        # query shape: [batch_size, hidden_size]
+        # values shape: [batch_size, seq_len, hidden_size]
+        
+        # Expand dims to [batch_size, 1, hidden_size]
+        query_with_time_axis = tf.expand_dims(query, 1)
+        
+        # Calculate attention scores
+        score = self.V(tf.nn.tanh(
+            self.W1(query_with_time_axis) + self.W2(values)
+        ))
+        
+        # Get attention weights
+        attention_weights = tf.nn.softmax(score, axis=1)
+        
+        # Apply attention weights to values
+        context_vector = attention_weights * values
+        context_vector = tf.reduce_sum(context_vector, axis=1)
+        
+        return context_vector, attention_weights
+
+def create_lstm_bahdanau_attention():
+    """
+    Create an LSTM model with Bahdanau-style attention.
+    This provides a more interpretable attention mechanism.
+    """
+    # Input layer
+    inputs = Input(shape=(23, 1))
+    
+    # LSTM layer
+    lstm = LSTM(64, return_sequences=True)(inputs)
+    lstm = Dropout(0.2)(lstm)
+    
+    # Extract query from the last time step
+    query = LSTM(64, return_sequences=False)(lstm)
+    
+    # Apply custom attention mechanism
+    attention_layer = BahdanauAttention(64)
+    context_vector, attention_weights = attention_layer(query, lstm)
+    
+    # Concatenate context vector with query
+    combined = Concatenate()([context_vector, query])
+    
+    # Output layers
+    dense = Dense(32, activation='relu')(combined)
+    dense = Dropout(0.2)(dense)
+    output = Dense(1, activation='sigmoid')(dense)
+    
+    # Create a custom model to access attention weights
+    model = Model(inputs=inputs, outputs=[output, attention_weights])
+    
+    # Define custom training steps to handle multiple outputs during training
+    class AttentionModel(Model):
+        def __init__(self, base_model):
+            super(AttentionModel, self).__init__()
+            self.base_model = base_model
+            
+        def call(self, inputs):
+            output, _ = self.base_model(inputs)
+            return output
+        
+        def train_step(self, data):
+            x, y = data
+            
+            with tf.GradientTape() as tape:
+                output, _ = self.base_model(x, training=True)
+                loss = self.compiled_loss(y, output)
+            
+            trainable_vars = self.base_model.trainable_variables
+            gradients = tape.gradient(loss, trainable_vars)
+            self.optimizer.apply_gradients(zip(gradients, trainable_vars))
+            self.compiled_metrics.update_state(y, output)
+            
+            return {m.name: m.result() for m in self.metrics}
+            
+    # Create and compile the wrapper model
+    wrapper_model = AttentionModel(model)
+    wrapper_model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return wrapper_model, model
+
+# Function to visualize attention weights
+def visualize_attention(model, X_sample, sample_idx=0):
+    """
+    Visualize attention weights for a sample.
+    """
+    # Get prediction and attention weights
+    _, attention_weights = model.predict(X_sample[sample_idx:sample_idx+1])
+    attention_weights = attention_weights.squeeze()
+    
+    # Plot attention heatmap
+    plt.figure(figsize=(12, 4))
+    sns.heatmap(attention_weights.T, cmap='viridis')
+    plt.title('Attention Weights for Features')
+    plt.xlabel('Feature Index')
+    plt.ylabel('Attention Weight')
+    plt.tight_layout()
+    plt.show()
+    
+    # Bar plot of attention weights
+    plt.figure(figsize=(14, 4))
+    plt.bar(range(len(attention_weights)), attention_weights.flatten())
+    plt.title('Feature Importance from Attention Weights')
+    plt.xlabel('Feature Index')
+    plt.ylabel('Attention Weight')
+    plt.xticks(range(len(attention_weights)))
+    plt.tight_layout()
+    plt.show()
+    
+    return attention_weights
+
+# Train and evaluate the models
+print("Training LSTM with Self-Attention...")
+self_attention_model = create_lstm_self_attention()
+self_attention_history = self_attention_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+print("\nTraining Bidirectional LSTM with Multi-Head Attention...")
+bidirectional_attention_model = create_bidirectional_lstm_attention()
+bidirectional_attention_history = bidirectional_attention_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+print("\nTraining LSTM with Bahdanau Attention...")
+bahdanau_wrapper_model, bahdanau_full_model = create_lstm_bahdanau_attention()
+bahdanau_history = bahdanau_wrapper_model.fit(
+    X_train_reshaped, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    verbose=1
+)
+
+# Evaluate models
+# For the Bahdanau model, we need to extract just the prediction output
+def predict_bahdanau(model, X):
+    pred, _ = model.predict(X)
+    return pred
+
+self_attention_metrics = evaluate_model(self_attention_model, X_test_reshaped, y_test, "LSTM with Self-Attention")
+bidirectional_metrics = evaluate_model(bidirectional_attention_model, X_test_reshaped, y_test, "Bidirectional LSTM with Attention")
+bahdanau_metrics = evaluate_model(
+    lambda X: predict_bahdanau(bahdanau_full_model, X), 
+    X_test_reshaped, 
+    y_test, 
+    "LSTM with Bahdanau Attention"
+)
+
+# Plot training history for all models
+plt.figure(figsize=(14, 6))
+
+plt.subplot(1, 2, 1)
+plt.plot(self_attention_history.history['accuracy'], label='Self-Attention')
+plt.plot(bidirectional_attention_history.history['accuracy'], label='Bidirectional')
+plt.plot(bahdanau_history.history['accuracy'], label='Bahdanau')
+plt.title('Training Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(self_attention_history.history['val_accuracy'], label='Self-Attention')
+plt.plot(bidirectional_attention_history.history['val_accuracy'], label='Bidirectional')
+plt.plot(bahdanau_history.history['val_accuracy'], label='Bahdanau')
+plt.title('Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Compare models performance
+models = ['Self-Attention', 'Bidirectional', 'Bahdanau']
+metrics = np.array([
+    self_attention_metrics,
+    bidirectional_metrics,
+    bahdanau_metrics
+])
+
+plt.figure(figsize=(14, 8))
+x = np.arange(len(models))
+width = 0.15
+
+plt.bar(x - width*2, metrics[:, 0], width, label='Accuracy')
+plt.bar(x - width, metrics[:, 1], width, label='Precision')
+plt.bar(x, metrics[:, 2], width, label='Recall')
+plt.bar(x + width, metrics[:, 3], width, label='F1 Score')
+plt.bar(x + width*2, metrics[:, 4], width, label='AUC')
+
+plt.ylabel('Score')
+plt.title('Attention Models Comparison')
+plt.xticks(x, models)
+plt.legend()
+plt.ylim(0, 1)
+plt.tight_layout()
+plt.show()
+
+# Visualize attention weights for Bahdanau model
+print("\nVisualizing Feature Importance via Attention Weights")
+sample_idx = 10  # Choose a sample from test set
+attention_weights = visualize_attention(bahdanau_full_model, X_test_reshaped, sample_idx)
+
+# Feature importance based on attention weights
+feature_importance = attention_weights.flatten()
+feature_indices = np.arange(len(feature_importance))
+feature_ranking = sorted(zip(feature_indices, feature_importance), key=lambda x: x[1], reverse=True)
+
+print("\nFeature Importance Ranking (based on attention weights):")
+for idx, (feature_idx, importance) in enumerate(feature_ranking):
+    print(f"Rank {idx+1}: Feature {feature_idx} - Importance: {importance:.4f}")
+
+# Save the best model (based on metrics)
+# Determine best model based on F1 score (can be changed to other metrics)
+model_scores = [m[3] for m in [self_attention_metrics, bidirectional_metrics, bahdanau_metrics]]
+best_model_idx = np.argmax(model_scores)
+best_model_name = models[best_model_idx]
+
+if best_model_idx == 0:
+    best_model = self_attention_model
+    best_model.save("best_lstm_attention_model.h5")
+elif best_model_idx == 1:
+    best_model = bidirectional_attention_model
+    best_model.save("best_lstm_attention_model.h5")
+else:
+    # For Bahdanau model, we save the wrapper model
+    best_model = bahdanau_wrapper_model
+    best_model.save("best_lstm_attention_model.h5")
+
+print(f"\nBest model ({best_model_name}) saved as 'best_lstm_attention_model.h5'")
+
+# Function to make predictions on new data (updated to handle Bahdanau model)
+def predict_new_data(model, new_data, is_bahdanau=False):
+    # Ensure new_data is a numpy array with shape (n_samples, 23)
+    if isinstance(new_data, list):
+        new_data = np.array(new_data)
+    if len(new_data.shape) == 1:
+        new_data = new_data.reshape(1, -1)
+    
+    # Scale the data
+    new_data_scaled = scaler.transform(new_data)
+    
+    # Reshape for LSTM
+    new_data_reshaped = new_data_scaled.reshape(new_data_scaled.shape[0], new_data_scaled.shape[1], 1)
+    
+    # Make prediction
+    if is_bahdanau:
+        predictions, _ = model.predict(new_data_reshaped)
+    else:
+        predictions = model.predict(new_data_reshaped)
+    
+    binary_predictions = (predictions > 0.5).astype(int)
+    
+    return binary_predictions.flatten(), predictions.flatten()
+
+# Example usage
+new_sample = np.random.randint(0, 5000, size=(1, 23)).astype(np.float32)
+
+if best_model_idx == 2:  # Bahdanau model
+    prediction, probability = predict_new_data(bahdanau_full_model, new_sample, is_bahdanau=True)
+else:
+    prediction, probability = predict_new_data(best_model, new_sample)
+
+print(f"\nNew data prediction: {prediction[0]} (probability: {probability[0]:.4f})")
